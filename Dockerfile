@@ -1,11 +1,10 @@
 FROM debian:stretch
 
-MAINTAINER Rubén López Gómez <me@rubeniskov.com>
+MAINTAINER Rubén López Gómez <dev@rubeniskov.com>
 
 ARG CROSS_ARCH
 ARG TOOLCHAIN_VERSION=all
 
-# Install gcc-6 compiler wget and ruby 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
     # Toolchain deps \
