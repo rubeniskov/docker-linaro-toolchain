@@ -1,0 +1,38 @@
+#!/bin/sh
+
+# alternative names mapping
+CROSS_COMPILE=$(cat assets/arm_arch_types.txt|grep -w '${CROSS_COMPILE}'|head -n1|awk '{print $1}')
+# toolchain version
+TOOLCHAIN_VERSION=${TOOLCHAIN_VERSION:=$(cat assets/toolchain_versions.txt|sort -n|tail -n 1|awk '{print $1}')}
+
+if [ -z "${CROSS_COMPILE}" ]; then
+    echo "${CROSS_COMPILE} not yet implemented." && exit 1 ;;
+fi
+
+
+
+CROSS_TRIPLE="$(ls /opt/toolchains/|grep gcc-linaro-${GCC_VERSION}|grep $CROSS_COMPILE)" ;;
+
+# store original PATH and LD_LIBRARY_PATH
+if [ -z ${PATH_ORIGIN+x} ]; then export PATH_ORIGIN=${PATH}; fi
+if [ -z ${LD_LIBRARY_PATH_ORIGIN+x} ]; then export LD_LIBRARY_PATH_ORIGIN=${LD_LIBRARY_PATH}; fi
+
+# configure environment
+if [ -n "${CROSS_TRIPLE}" ]; then
+	export ARCH=arm
+	export CROSS_COMPILE=aarch64-linux-gnu-
+    export CROSS_ROOT="/opt/toolchains/${CROSS_TRIPLE}"
+    export PATH="${CROSS_ROOT}/bin:${PATH_ORIGIN}"
+    export LD_LIBRARY_PATH="/opt/toolchains/${CROSS_TRIPLE}/lib:${LD_LIBRARY_PATH_ORIGIN}"
+fi
+
+# try to exec direct binary instead on relying on the $PATH
+binary=$1
+shift
+if [ -n "${CROSS_TRIPLE}" -a -f "${CROSS_ROOT}/bin/$binary" ]; then
+    binary="${CROSS_ROOT}/bin/$binary"
+fi
+
+# finally exec
+exec "${binary}" $@
+exit $?

@@ -1,0 +1,257 @@
+#!/bin/bash
+# toolchain utils
+# 
+# deps: gpg curl xz-utils ca-certificates
+
+declare -A GCC_VERSIONS=( \
+	["4.9"]="2016.02 2017.01" \
+	["5.1"]="2015.08" \
+	["5.2"]="2015.11-1 2015.11-2" \
+	["5.3"]="2016.02 2016.05" \
+	["5.4"]="2017.01 2017.05" \
+	["5.5"]="2017.10" \
+	["6.1"]="2016.08" \
+	["6.2"]="2016.11" \
+	["6.3"]="2017.02 2017.05" \
+	["6.4"]="2017.08 2017.11" \
+	["7.1"]="2017.05 2017.08" \
+	["7.2"]="2017.11" \
+)
+
+declare -a ARCH_TYPES=( \
+	'aarch64-elf',\
+	'aarch64-linux-gnu',\
+	'aarch64_be-elf',\
+	'aarch64_be-linux-gnu',\
+	'arm-eabi',\
+	'arm-linux-gnueabi',\
+	'arm-linux-gnueabihf',\
+	'armeb-eabi',\
+	'armeb-linux-gnueabi',\
+	'armeb-linux-gnueabihf',\
+	'armv8l-linux-gnueabih'\
+)
+
+display_alert()
+#--------------------------------------------------------------------------------------------------------------------------------
+# Let's have unique way of displaying alerts
+#--------------------------------------------------------------------------------------------------------------------------------
+{
+	# log function parameters to install.log
+	[[ -n $DEST ]] && echo "Displaying message: $@" >> $DEST/debug/output.log
+
+	local tmp=""
+	[[ -n $2 ]] && tmp="[\e[0;33m $2 \x1B[0m]"
+
+	case $3 in
+		err)
+		echo -e "[\e[0;31m error \x1B[0m] $1 $tmp"
+		;;
+
+		wrn)
+		echo -e "[\e[0;35m warn \x1B[0m] $1 $tmp"
+		;;
+
+		ext)
+		echo -e "[\e[0;32m o.k. \x1B[0m] \e[1;32m$1\x1B[0m $tmp"
+		;;
+
+		info)
+		echo -e "[\e[0;32m o.k. \x1B[0m] $1 $tmp"
+		;;
+
+		*)
+		echo -e "[\e[0;32m .... \x1B[0m] $1 $tmp"
+		;;
+	esac
+}
+
+
+
+
+toolchain_extract() {
+	local file=$1
+	local dest=$2
+	display_alert "Extracting" "$file into $dest" "info"
+	mkdir -p "$dest"
+	tar --overwrite -xf $file -C $dest
+}
+
+toolchain_verify() {
+	display_alert "Verifying"
+	if grep -q 'BEGIN PGP SIGNATURE' ${filename}.asc; then
+		if [[ ! -d $DEST/.gpg ]]; then
+			mkdir -p $DEST/.gpg
+			chmod 700 $DEST/.gpg
+			touch $DEST/.gpg/gpg.conf
+			chmod 600 $DEST/.gpg/gpg.conf
+		fi
+		(gpg --homedir $DEST/.gpg --no-permission-warning --list-keys 8F427EAF || gpg --homedir $DEST/.gpg --no-permission-warning --keyserver keyserver.ubuntu.com --recv-keys 8F427EAF) 2>&1 | tee -a $DEST/debug/output.log
+		gpg --homedir $DEST/.gpg --no-permission-warning --verify --trust-model always -q ${filename}.asc 2>&1 | tee -a $DEST/debug/output.log
+		[[ ${PIPESTATUS[0]} -eq 0 ]] && verified=true
+	else
+		md5sum -c --status ${filename}.asc && verified=true
+	fi
+
+	if [[ $verified == false ]]; then
+		display_alert "Verification failed" "" "wrn"
+		return 1
+	fi
+
+	return 0
+}
+# download_toolchain <url> [destination]
+toolchain_download() {
+
+	local url=$1
+	local dest=$2
+	local filename=${url##*/}
+	local dirname=${filename//.tar.xz}
+	
+	display_alert "Downloading" "${url} ${dest}/${filename}" "info"
+
+	if [ ! -f "${dest}/${filename}" ]; then
+		mkdir -p "${dest}/"
+		display_alert "Downloading" "${dirname}"
+		curl -Lf --progress-bar "${url}" -o "${dest}/${filename}"
+
+		display_alert "Downloaded" "${dest}/${filename}" "info"
+	else
+		display_alert "Allready downloaded" "${dest}/${filename}" "info"
+	fi
+	return 0
+}
+
+# toolchain_install <gcc-ver> <cross_arch> <dest> <download_path> <host_arch: default_host_arch>
+# ex: toolchain_install 6.3 aarch64-linux-gnu
+toolchain_install() {
+	# version default latest
+	#-a|--cross_arch=<default aarch64-linux-gnu>
+	#-r|--revision= default latest
+	#-d|--destination=<default /opt/toolchains>
+	#-p|--download_path=<default /tmp>
+	#-h|--host_arch=<default $(uname -m)>
+	
+	local lastest_version=$(printf "%s\n" "${!GCC_VERSIONS[@]}" | sort -n | tail -1)
+	local version=${1:-$lastest_version}
+	local revision=$(printf "%s" "${GCC_VERSIONS[$version]}" | tr " " "\n" | tail -1)
+	local cross_arch=${2:-"aarch64-linux-gnu"}
+	local dest=${3:-"/opt/toolchains"}
+	local download_path=${4:-"/tmp"}
+	local host_arch=${5:-"$(uname -m)"}
+	local tar_filename=$(toolchain_search $version $revision $cross_arch $host_arch)
+	
+	display_alert "Installing" "$version $cross_arch $host_arch" "info"
+
+	if [[ " ${ARCH_TYPES[*]} " == *"${cross_arch}"* ]]; then
+    	display_alert "ARCH type found" "${cross_arch}" "info"
+    else
+    	display_alert "ARCH type not found" "$cross_arch" "wrn"
+    	echo -e "\r Available arch types: ${ARCH_TYPES}"
+		return 1
+	fi
+
+	if [ ${GCC_VERSIONS[$version]+_} ]; then
+		display_alert "GCC version found" "$version match with: [${GCC_VERSIONS[$version]}]" "info"
+	else
+		display_alert "GCC version not found" "$version" "wrn"
+		echo -e "\r Available GCC versions: ${!GCC_VERSIONS[@]}"
+		return 1
+	fi
+
+	local url="https://releases.linaro.org/components/toolchain/binaries/${version}-${revision}/${cross_arch}/${tar_filename}"
+	local failed=false
+
+	# download asc
+	toolchain_download "${url}" "${download_path}" || failed=true
+	toolchain_extract "${download_path}/${tar_filename}" "${dest}" || failed=true
+	
+	if [[ $failed == true ]]; then
+		display_alert "Installation failed" "" "wrn"
+		return 1
+	fi
+
+	return 0
+}
+
+toolchain_search(){
+	#versions
+	#revisions
+	#cross_archs
+	#host_archs
+	
+	curl -s "https://releases.linaro.org/components/toolchain/binaries/${1}-${2}/${3}/" |\
+	grep "${1}-${2}" |\
+	grep "${4}_${3}" |\
+	sed -n 's/.*href="\([^"]*\).*/\1/p' |\
+	head -n 1 |\
+	awk '
+	  function basename(file, a, n) {
+	    n = split(file, a, "/")
+	    return a[n]
+	  }
+	  {print basename($1)}'
+}
+toolchain_install_all(){
+	shift
+	for version in $(printf "%s\n" "${!GCC_VERSIONS[@]}" | sort -n); do
+        toolchain_install $version $@
+    done
+
+    return 0
+}
+
+toolchain_usage(){
+cat <<EOF
+Usage: toolchain.sh [help|download|verify|install] <options>
+       
+       Toolchain linaro utility
+       help:       	 display this usage
+       download:  	 download toolchain binaries
+       verify:     	 verify toolchain tarball checksum
+       install:    	 extract and install toolchain
+EOF
+}
+
+if [[ $_ != $0 ]]; then 
+	while true; do
+	  case "$1" in
+	    download)
+			shift
+			toolchain_download $@
+			break 
+			;;
+		verify)
+			shift
+			toolchain_verify $@
+			break 
+			;;
+		extract)
+			shift
+			toolchain_extract $@
+			break 
+			;;
+		install)
+			shift
+			if [ "$1" = "all" ]; then
+				toolchain_install_all $@
+			else 
+				toolchain_install $@
+			fi
+			break 
+			;;
+		-h|--help|help|?)
+        	toolchain_usage
+        	exit 1
+        	;;
+       	--)
+			shift
+			break
+			;;
+	    *) 
+			toolchain_usage
+        	exit 1
+			;;
+	  esac
+	done	
+fi
